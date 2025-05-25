@@ -8,6 +8,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.ContentCachingRequestWrapper;
+import org.springframework.util.StringUtils;
+import java.util.Enumeration;
 
 import java.io.IOException;
 
@@ -18,13 +21,33 @@ public class LoggingFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
-        // リクエスト内容のログ出力
-        logger.info("[Request] {} {}", request.getMethod(), request.getRequestURI());
-        // ボディ取得はラップが必要だが、ここではパラメータのみ簡易出力
-        request.getParameterMap().forEach((k, v) -> logger.info("[RequestParam] {}={}", k, String.join(",", v)));
+        // リクエストをラップ
+        ContentCachingRequestWrapper wrappedRequest = new ContentCachingRequestWrapper(request);
 
         // レスポンス内容のログ出力（簡易版: ステータスのみ）
-        filterChain.doFilter(request, response);
-        logger.info("[Response] status={}", response.getStatus());
+        try {
+            filterChain.doFilter(wrappedRequest, response);
+        } finally {
+            logger.info("[Request] {} {}", request.getMethod(), request.getRequestURI());
+            request.getParameterMap().forEach((k, v) -> logger.info("[RequestParam] {}={}", k, String.join(",", v)));
+
+            String contentType = request.getContentType();
+            if (contentType != null && contentType.startsWith("multipart/form-data")) {
+                // multipartの場合はファイル名・サイズのみ出力
+                Enumeration<String> partNames = request.getParameterNames();
+                while (partNames.hasMoreElements()) {
+                    String name = partNames.nextElement();
+                    logger.info("[MultipartParam] {}={}", name, request.getParameter(name));
+                }
+                // ファイル情報はMultipartControllerで処理されるため、ここでは省略
+            } else {
+                byte[] buf = wrappedRequest.getContentAsByteArray();
+                if (buf.length > 0) {
+                    String body = new String(buf, wrappedRequest.getCharacterEncoding());
+                    logger.info("[RequestBody] {}", StringUtils.truncate(body, 200));
+                }
+            }
+            logger.info("[Response] status={}", response.getStatus());
+        }
     }
 } 
